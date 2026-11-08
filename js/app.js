@@ -141,7 +141,7 @@
     s.profile.kcal = clamp(Number(s.profile.kcal) || 1650, 1500, 3000);
     s.profile.protein = clamp(Number(s.profile.protein) || 135, 60, 250);
     s.profile.fat = clamp(Number(s.profile.fat) || 58, 30, 150);
-    s.profile.carbs = clamp(Number(s.profile.carbs) || 145, 50, 400);
+    s.profile.carbs = clamp(Number(s.profile.carbs) || 147, 50, 400);
     s.profile.water = clamp(Number(s.profile.water) || 2000, 1000, 4000);
     s.log = raw.log && typeof raw.log === 'object' ? raw.log : {};
     s.weights = Array.isArray(raw.weights) && raw.weights.length ? raw.weights.filter(x => x && x.date && Number(x.kg) > 0) : d.weights;
@@ -186,15 +186,83 @@
     return diff % 28;
   }
   function planForDate(date) { return PLAN[planIndexForDate(date)]; }
-  function planTotals(plan) {
+
+  /* Порции меню подстраиваются под калории. Белок сохраняем,
+     а жиры и углеводы масштабируем — иначе при снижении калорий
+     первым проседал бы белок. */
+  const CARB_ITEM = /(овсян|гречк|рис|киноа|паст|хлеб|мук|гранол|картоф|банан|яблок|груш|апельсин|ягод|черник|мёд|мед|какао|хлебец|суп)/i;
+  const FAT_ITEM = /(масл|авокадо|орех|миндал|арахис|семечк|чиа)/i;
+
+  function kcalTarget() { return clamp(Number(S.profile.kcal) || 1650, 1500, 3000); }
+
+  function basePlanTotals(plan) {
     return plan.meals.reduce((a, m) => {
       a.kcal += m.kcal; a.p += m.protein; a.f += m.fat; a.c += m.carbs; a.fi += m.fiber; return a;
     }, { kcal: 0, p: 0, f: 0, c: 0, fi: 0 });
   }
+
+  function planScale(plan, target) {
+    const base = basePlanTotals(plan).kcal;
+    return clamp((target || kcalTarget()) / base, 0.65, 1.8);
+  }
+
+  function scaleItemText(text, ratio) {
+    if (Math.abs(ratio - 1) < 0.02) return text;
+    const lower = text.toLowerCase();
+    if (!CARB_ITEM.test(lower) && !FAT_ITEM.test(lower)) return text;
+    return text.replace(/(\d+(?:[.,]\d+)?)\s*(г|мл)(?=\s|$|[),.;])/gi, (all, num, unit) => {
+      const n = parseFloat(String(num).replace(',', '.')) * ratio;
+      let v;
+      if (n < 10) v = Math.round(n * 2) / 2;
+      else if (n < 30) v = Math.round(n);
+      else v = Math.round(n / 5) * 5;
+      if (v < 1) v = 1;
+      return `${String(v).replace('.', ',')} ${unit}`;
+    });
+  }
+
+  function scaledMeal(meal, plan, target) {
+    const s = planScale(plan, target);
+    const targetKcal = meal.kcal * s;
+    const proteinKcal = meal.protein * 4;
+    const baseFatCarbKcal = Math.max(1, meal.fat * 9 + meal.carbs * 4);
+    const ratio = clamp((targetKcal - proteinKcal) / baseFatCarbKcal, 0.4, 2.4);
+    return Object.assign({}, meal, {
+      kcal: Math.round(targetKcal),
+      protein: round1(meal.protein),
+      fat: round1(meal.fat * ratio),
+      carbs: round1(meal.carbs * ratio),
+      fiber: round1(meal.fiber * ratio),
+      portionScale: s,
+      fatCarbRatio: ratio,
+      items: meal.items.map(x => scaleItemText(x, ratio))
+    });
+  }
+
+  function scaledMeals(plan, target) {
+    return plan.meals.map(m => scaledMeal(m, plan, target));
+  }
+
+  function planTotals(plan, target) {
+    return scaledMeals(plan, target).reduce((a, m) => {
+      a.kcal += m.kcal; a.p += m.protein; a.f += m.fat; a.c += m.carbs; a.fi += m.fiber; return a;
+    }, { kcal: 0, p: 0, f: 0, c: 0, fi: 0 });
+  }
+
+  function scaledPlanAverages(target) {
+    const sums = { kcal: 0, p: 0, f: 0, c: 0, fi: 0 };
+    PLAN.forEach(day => {
+      const t = planTotals(day, target);
+      sums.kcal += t.kcal; sums.p += t.p; sums.f += t.f; sums.c += t.c; sums.fi += t.fi;
+    });
+    const n = PLAN.length || 1;
+    return { kcal: sums.kcal / n, p: sums.p / n, f: sums.f / n, c: sums.c / n, fi: sums.fi / n };
+  }
+
   function totalsFor(date) {
     const plan = planForDate(date);
     const t = { kcal: 0, p: 0, f: 0, c: 0, fi: 0, meals: 0 };
-    plan.meals.forEach(m => {
+    scaledMeals(plan).forEach(m => {
       const p = portion(date, m.id);
       if (p > 0) { t.meals++; t.kcal += m.kcal * p; t.p += m.protein * p; t.f += m.fat * p; t.c += m.carbs * p; t.fi += m.fiber * p; }
     });
@@ -206,7 +274,7 @@
   function extrasFor(date, mealId) { return getLog(date).extras.filter(x => (x.mealId || 'snack') === mealId); }
   function mealTotal(date, mealId) {
     const plan = planForDate(date);
-    const m = plan.meals.find(x => x.id === mealId);
+    const m = scaledMeals(plan).find(x => x.id === mealId);
     let t = { kcal: 0, p: 0, f: 0, c: 0 };
     if (m) {
       const p = portion(date, mealId);
@@ -385,6 +453,7 @@
     const plan = planForDate(date);
     const t = totalsFor(date);
     const p = S.profile;
+    const targets = planTotals(plan);
     const remaining = p.kcal - t.kcal;
     const over = remaining < 0;
     const pct = clamp(t.kcal / p.kcal * 100, 0, 100);
@@ -394,7 +463,7 @@
       const filled = water >= (i + 1) * 250;
       return `<button class="cup ${filled ? 'on' : ''}" data-act="water" data-i="${i}" aria-label="${filled ? 'Убрать' : 'Добавить'} 250 мл воды">${ICONS.drop}</button>`;
     }).join('');
-    const mealRows = plan.meals.map(m => {
+    const mealRows = scaledMeals(plan).map(m => {
       const por = portion(date, m.id);
       return `<div class="meal-row ${por > 0 ? 'done' : ''}">
         <button class="meal-open" data-act="open-meal" data-date="${date}" data-meal="${m.id}" aria-label="${MEAL_META[m.id].name}: ${esc(m.dish)}">
@@ -427,9 +496,9 @@
               <div class="hero-eaten"><b>${fmt(t.kcal)}</b> ккал съедено</div>
               <div class="hero-remain">${over ? `на ${fmt(-remaining)} ккал больше` : `${fmt(remaining)} ккал можно ещё`}</div>
               <div class="hero-macros">
-                ${macroLine('Белки', t.p, p.protein)}
-                ${macroLine('Жиры', t.f, p.fat)}
-                ${macroLine('Углеводы', t.c, p.carbs)}
+                ${macroLine('Белки', t.p, targets.p)}
+                ${macroLine('Жиры', t.f, targets.f)}
+                ${macroLine('Углеводы', t.c, targets.c)}
               </div>
             </div>
           </div>
@@ -442,7 +511,7 @@
         <div class="section">
           <div class="section-head">
             <h2>Приёмы пищи</h2>
-            <span class="side">${t.meals} из 4 · ${fmt(plan.meals.reduce((a, m) => a + m.kcal, 0))} ккал</span>
+            <span class="side">${t.meals} из 4 · ${fmt(kcalTarget())} ккал</span>
           </div>
           <div class="meal-stack">${mealRows}</div>
         </div>
@@ -481,18 +550,18 @@
     const currentIndex = planIndexForDate(todayISO());
     const isToday = flat === currentIndex;
     const logDate = isToday ? todayISO() : '';
-    const weekAvg = Math.round(PLAN.reduce((a, day) => a + planTotals(day).kcal, 0) / PLAN.length / 10) * 10;
+    const weekAvg = Math.round(kcalTarget() / 10) * 10;
     const weekTabs = MONTH_WEEKS.map((mw, i) => `
       <button class="week-tab ${i === w ? 'on' : ''}" data-act="plan-week" data-i="${i}">
         <b>Неделя ${i + 1}</b><span>${esc(mw.title)}</span>
       </button>`).join('');
+    const scaled = scaledMeals(plan);
     const week = PLAN.slice(w * 7, w * 7 + 7).map((day, j) => {
-      const tt = planTotals(day);
       return `<button class="day-pill ${j === d ? 'on' : ''} ${w * 7 + j === currentIndex ? 'today' : ''}" data-act="plan-day" data-i="${j}">
-        <span class="dn">${day.short}</span><span class="dk">${fmt(tt.kcal)}</span>
+        <span class="dn">${day.short}</span><span class="dk">${fmt(kcalTarget())}</span>
       </button>`;
     }).join('');
-    const meals = plan.meals.map(m => `
+    const meals = scaled.map(m => `
       <div class="plan-meal card card-flat">
         <div class="plan-meal-head">
           ${mealMark(m.id)}
@@ -518,11 +587,12 @@
           <p class="plan-note">${esc(plan.note)}</p>
           <p class="week-focus">${esc(meta.note)}</p>
           <div class="plan-totals">
-            <span class="chip-stat"><b>${fmt(t.kcal)}</b> ккал</span>
+            <span class="chip-stat"><b>${fmt(kcalTarget())}</b> ккал</span>
             <span class="chip-stat"><b>${Math.round(t.p)}</b> г белка</span>
             <span class="chip-stat"><b>${Math.round(t.f)}</b> г жиров</span>
             <span class="chip-stat"><b>${Math.round(t.c)}</b> г углеводов</span>
           </div>
+          <p class="plan-adapt">Порции автоматически подстроены под ${fmt(kcalTarget())} ккал; белок сохранён.</p>
         </section>
 
         <div class="section-head" style="margin-top:22px"><h2>Меню дня</h2><span class="side">${plan.meals.length} приёма · день ${flat + 1}</span></div>
@@ -563,11 +633,12 @@
     const plan = planForDate(date);
     const t = totalsFor(date);
     const p = S.profile;
+    const targets = planTotals(plan);
     const isToday = date === todayISO();
     const label = isToday ? 'Сегодня' : cap(WEEKDAYS[weekdayIndex(date)]);
     const parts = humanDate(date).split(' ');
     const detail = `${parts[0]} ${parts[1]}${parts[2] ? ' ' + parts[2] : ''}`;
-    const blocks = plan.meals.map(m => {
+    const blocks = scaledMeals(plan).map(m => {
       const por = portion(date, m.id);
       const extras = extrasFor(date, m.id);
       const mt = mealTotal(date, m.id);
@@ -627,9 +698,9 @@
             <div class="ds-remain"><b>${remaining >= 0 ? fmt(remaining) : '+' + fmt(-remaining)}</b><span>${remaining >= 0 ? 'осталось' : 'перебор'}</span></div>
           </div>
           <div class="ds-bars">
-            <div class="ds-bar"><span class="n">Белки</span><span class="t"><i style="width:${clamp(t.p / p.protein * 100, 0, 100)}%"></i></span><span class="v">${fmt(t.p)} / ${p.protein} г</span></div>
-            <div class="ds-bar"><span class="n">Жиры</span><span class="t"><i style="width:${clamp(t.f / p.fat * 100, 0, 100)}%"></i></span><span class="v">${fmt(t.f)} / ${p.fat} г</span></div>
-            <div class="ds-bar"><span class="n">Углеводы</span><span class="t"><i style="width:${clamp(t.c / p.carbs * 100, 0, 100)}%"></i></span><span class="v">${fmt(t.c)} / ${p.carbs} г</span></div>
+            <div class="ds-bar"><span class="n">Белки</span><span class="t"><i style="width:${clamp(t.p / targets.p * 100, 0, 100)}%"></i></span><span class="v">${fmt(t.p)} / ${Math.round(targets.p)} г</span></div>
+            <div class="ds-bar"><span class="n">Жиры</span><span class="t"><i style="width:${clamp(t.f / targets.f * 100, 0, 100)}%"></i></span><span class="v">${fmt(t.f)} / ${Math.round(targets.f)} г</span></div>
+            <div class="ds-bar"><span class="n">Углеводы</span><span class="t"><i style="width:${clamp(t.c / targets.c * 100, 0, 100)}%"></i></span><span class="v">${fmt(t.c)} / ${Math.round(targets.c)} г</span></div>
           </div>
         </section>
 
@@ -822,8 +893,9 @@
   function openMeal(date, mealId, planDay) {
     const dayIndex = planDay !== undefined && planDay !== '' ? clamp(Number(planDay), 0, 27) : planIndexForDate(todayISO());
     const plan = date ? planForDate(date) : PLAN[dayIndex];
-    const m = plan.meals.find(x => x.id === mealId);
-    if (!m) return;
+    const base = plan.meals.find(x => x.id === mealId);
+    if (!base) return;
+    const m = scaledMeal(base, plan);
     const por = date ? portion(date, mealId) : 0;
     const canLog = !!date;
     const portionButtons = canLog ? `<div class="detail-section">
@@ -832,7 +904,7 @@
         ${[0.5, 1, 1.5].map(p => `<button class="${por === p ? 'on' : ''}" style="flex:1" data-act="meal-portion" data-date="${date}" data-meal="${mealId}" data-p="${p}">${p === 0.5 ? '½' : p === 1.5 ? '1½' : '1'} порция</button>`).join('')}
       </div>
       <p class="tiny muted" style="margin:7px 0 0">Порция запишется сразу. Можно изменить или убрать в дневнике.</p>
-    </div>` : `<div class="detail-tip">${ICONS.info}<span>Это меню на ${esc(plan.full.toLowerCase())}. Записать его в дневник можно в этот день недели.</span></div>`;
+    </div>` : `<div class="detail-tip">${ICONS.info}<span>Это меню на ${esc(plan.full.toLowerCase())}. Записать его в дневник можно в этот день цикла.</span></div>`;
     const content = `
       <div class="sheet-head">
         <div class="sheet-title-row">
@@ -871,7 +943,7 @@
   let picker = null;
   function planMealRows(date) {
     const plan = planForDate(date);
-    return plan.meals.map(m => {
+    return scaledMeals(plan).map(m => {
       const done = portion(date, m.id) > 0;
       return `<button class="food-row" data-act="picker-plan-meal" data-date="${date}" data-meal="${m.id}" ${done ? 'disabled' : ''}>
         <span class="food-dot ${m.id === 'breakfast' ? 'carbs' : m.id === 'lunch' ? 'protein' : m.id === 'snack' ? 'fruit' : 'veg'}"></span>
@@ -1043,6 +1115,7 @@
     const p = S.profile;
     const cur = currentWeight();
     const calc = calcTargets();
+    const avg = scaledPlanAverages();
     return `<div class="sheet-head">
       <div><p class="sheet-kicker">Твой профиль</p><h2 class="sheet-title">Настройки.</h2><p class="sheet-sub">Всё можно изменить — под себя, а не под идеал.</p></div>
       <button class="sheet-close" data-act="sheet-close" aria-label="Закрыть">${ICONS.close}</button>
@@ -1063,6 +1136,7 @@
             <option value="1.5" ${Number(p.activity) === 1.5 ? 'selected' : ''}>Много движения</option>
           </select></div>
         </div>
+        <p class="field-hint">Цель по весу влияет на прогресс, но не на калории. Дневную калорийность меняй ниже.</p>
       </div>
     </div>
     <div class="settings-section">
@@ -1070,12 +1144,13 @@
       <div class="settings-card">
         <div class="form-row">
           <div class="field"><label for="set-kcal">Калории</label><input class="input" id="set-kcal" type="number" inputmode="numeric" min="1500" max="3000" value="${p.kcal}"></div>
-          <div class="field"><label for="set-protein">Белки, г</label><input class="input" id="set-protein" type="number" inputmode="numeric" min="60" max="250" value="${p.protein}"></div>
+          <div class="field"><label for="set-protein">Белки, г</label><input class="input" id="set-protein" type="number" inputmode="numeric" min="60" max="250" value="${Math.round(avg.p)}" readonly aria-readonly="true"></div>
         </div>
         <div class="form-row" style="margin-top:9px">
-          <div class="field"><label for="set-fat">Жиры, г</label><input class="input" id="set-fat" type="number" inputmode="numeric" min="30" max="150" value="${p.fat}"></div>
-          <div class="field"><label for="set-carbs">Углеводы, г</label><input class="input" id="set-carbs" type="number" inputmode="numeric" min="50" max="400" value="${p.carbs}"></div>
+          <div class="field"><label for="set-fat">Жиры, г</label><input class="input" id="set-fat" type="number" inputmode="numeric" min="30" max="150" value="${Math.round(avg.f)}" readonly aria-readonly="true"></div>
+          <div class="field"><label for="set-carbs">Углеводы, г</label><input class="input" id="set-carbs" type="number" inputmode="numeric" min="50" max="400" value="${Math.round(avg.c)}" readonly aria-readonly="true"></div>
         </div>
+        <p class="field-hint">БЖУ — среднее по меню. Пересчитывается вместе с порциями: белок сохраняется, жиры и углеводы подстраиваются под калории.</p>
         <div class="form-row" style="margin-top:9px">
           <div class="field"><label for="set-water">Вода, мл</label><input class="input" id="set-water" type="number" inputmode="numeric" min="1000" max="4000" step="100" value="${p.water}"></div>
           <div class="field"><label>Текущий вес</label><input class="input" value="${fmt1(cur.kg)} кг" disabled></div>
@@ -1104,7 +1179,7 @@
       <p class="safety"><b>План не заменяет консультацию врача.</b> Он рассчитан на здоровую взрослую девушку ${ageNow()} ${plural(ageNow(), 'год', 'года', 'лет')}, ${p.height} см, ${fmt1(currentWeight().kg)} кг. При беременности, расстройстве пищевого поведения, проблемах со щитовидной железой, ЖКТ или приёме лекарств сначала обсуди питание со специалистом. Резкое ограничение калорий может навредить.</p>
     </div>
     <div class="sheet-actions" style="margin-top:18px"><button class="btn wide" data-act="settings-save">Сохранить настройки</button></div>
-    <p class="footer-note" style="padding-bottom:6px">Тепло · версия 1.2</p>`;
+    <p class="footer-note" style="padding-bottom:6px">Тепло · версия 1.3</p>`;
   }
   function openSettings() { mountSheet(settingsHTML(), 'Настройки'); }
 
@@ -1130,24 +1205,27 @@
     S.profile.height = Math.round(height);
     S.profile.goalWeight = goal;
     S.profile.activity = activity || 1.375;
+    const oldKcal = Math.round(Number(S.profile.kcal) || 1650);
     S.profile.kcal = Math.round(kcal);
-    S.profile.protein = Math.round(protein);
-    S.profile.fat = Math.round(fat);
-    S.profile.carbs = Math.round(carbs);
+    const nextAvg = scaledPlanAverages(S.profile.kcal);
+    S.profile.protein = Math.round(nextAvg.p);
+    S.profile.fat = Math.round(nextAvg.f);
+    S.profile.carbs = Math.round(nextAvg.c);
     S.profile.water = Math.round(water);
     save();
     closeSheet();
     render(false);
-    toast('Настройки сохранены');
+    toast(S.profile.kcal !== oldKcal ? `Порции пересчитаны под ${fmt(S.profile.kcal)} ккал` : 'Настройки сохранены');
   }
 
   function recalcFields() {
     const c = calcTargets();
+    const avg = scaledPlanAverages(c.kcal);
     if ($('#set-kcal')) $('#set-kcal').value = c.kcal;
-    if ($('#set-protein')) $('#set-protein').value = c.protein;
-    if ($('#set-fat')) $('#set-fat').value = c.fat;
-    if ($('#set-carbs')) $('#set-carbs').value = c.carbs;
-    toast('Расчёт подставлен — проверь и сохрани');
+    if ($('#set-protein')) $('#set-protein').value = Math.round(avg.p);
+    if ($('#set-fat')) $('#set-fat').value = Math.round(avg.f);
+    if ($('#set-carbs')) $('#set-carbs').value = Math.round(avg.c);
+    toast('Калории пересчитаны — порции и БЖУ подстроятся');
   }
 
   function exportData() {
@@ -1429,6 +1507,14 @@
     if (e.target.id === 'gram-input' && picker) {
       picker.grams = clamp(Number(String(e.target.value).replace(',', '.')) || 0, 0, 2000);
       updatePortionPreview();
+      return;
+    }
+    if (e.target.id === 'set-kcal' && $('#set-protein')) {
+      const next = clamp(Number(e.target.value) || 1650, 1500, 3000);
+      const avg = scaledPlanAverages(next);
+      $('#set-protein').value = Math.round(avg.p);
+      $('#set-fat').value = Math.round(avg.f);
+      $('#set-carbs').value = Math.round(avg.c);
       return;
     }
     if (e.target.matches('[data-note]')) {
