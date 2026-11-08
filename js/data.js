@@ -14,7 +14,7 @@
     kcal: 1650,
     protein: 135,
     fat: 58,
-    carbs: 145,
+    carbs: 147,
     fiber: 28,
     water: 2000
   };
