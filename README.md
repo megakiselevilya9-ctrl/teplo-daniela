@@ -4,6 +4,11 @@
 
 Это **PWA**: оно устанавливается на iPhone прямо из Safari, открывается с домашнего экрана без адресной строки и работает офлайн. App Store и Mac для этого не нужны.
 
+**Опубликованная версия:** [megakiselevilya9-ctrl.github.io/teplo-daniela](https://megakiselevilya9-ctrl.github.io/teplo-daniela/)  
+**Репозиторий:** [github.com/megakiselevilya9-ctrl/teplo-daniela](https://github.com/megakiselevilya9-ctrl/teplo-daniela)
+
+> Репозиторий публичный: имя Даниелы, рост и вес видны в исходниках. Если это нежелательно, репозиторий можно сделать приватным, но бесплатный GitHub Pages тогда отключится — для установки останется Netlify.
+
 ---
 
 ## Что уже есть
