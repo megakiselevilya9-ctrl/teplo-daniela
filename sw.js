@@ -1,5 +1,5 @@
 /* Тепло — офлайн-режим. Обновляется при новом визите онлайн. */
-const CACHE = 'teplo-v1.2.0';
+const CACHE = 'teplo-v1.3.1';
 const ASSETS = [
   './',
   './index.html',
