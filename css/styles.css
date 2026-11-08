@@ -274,6 +274,7 @@ svg{display:block}
 .plan-title{font-family:var(--serif);font-size:26px;font-weight:600;letter-spacing:-.025em;margin:4px 0 0}
 .plan-note{font-size:12px;line-height:1.5;color:var(--ink-soft);margin:5px 0 0}
 .week-focus{font-size:10.5px;line-height:1.5;color:var(--sage-deep);margin:9px 0 0;padding:7px 9px;background:rgba(233,237,225,.78);border-radius:10px}
+.plan-adapt{font-size:9.5px;line-height:1.45;color:var(--sage-deep);margin:9px 0 0;padding-left:2px}
 .plan-totals{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
 .chip-stat{
   display:inline-flex;align-items:baseline;gap:4px;padding:6px 9px;border-radius:9px;
@@ -430,6 +431,8 @@ svg{display:block}
 }
 .input:focus{border-color:var(--accent);background:var(--surface)}
 .input::placeholder{color:var(--faint)}
+.input[readonly]{color:var(--muted);background:var(--surface-2);border-color:var(--line)}
+.field-hint{font-size:9.5px;line-height:1.45;color:var(--muted);margin:8px 2px 0}
 select.input{background-image:none}
 .form-card .btn{margin-top:10px}
 .history-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
